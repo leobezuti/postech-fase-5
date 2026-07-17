@@ -28,6 +28,9 @@ jobs:
   sonarcloud:
     name: SonarCloud Analysis
     runs-on: ubuntu-latest
+    concurrency:
+      group: sonar-scanner-cli-cache
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
