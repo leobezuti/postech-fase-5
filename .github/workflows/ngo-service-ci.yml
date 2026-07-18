@@ -23,7 +23,7 @@ env:
   SERVICE_NAME: ngo-service
   IMAGE_ALIAS: ngo-service-image
   ECR_REPOSITORY: ngo-service
-  GITOPS_REPO: diego-silva1016/postech-fase-5-gitops
+  GITOPS_REPO: leobezuti/postech-fase-5-gitops
   SKIP_SECURITY_GATES: "true" # set to "false" to re-enable Sonar and Trivy
 
 jobs:

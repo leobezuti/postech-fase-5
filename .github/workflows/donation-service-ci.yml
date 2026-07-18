@@ -23,7 +23,7 @@ env:
   SERVICE_NAME: donation-service
   IMAGE_ALIAS: donation-service-image
   ECR_REPOSITORY: donation-service
-  GITOPS_REPO: diego-silva1016/postech-fase-5-gitops
+  GITOPS_REPO: leobezuti/postech-fase-5-gitops
   SKIP_SECURITY_GATES: "true" # set to "false" to re-enable Sonar and Trivy
 
 jobs:
