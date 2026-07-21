@@ -58,8 +58,6 @@ def register_volunteer():
 @app.route('/volunteers/<int:ngo_id>', methods=['GET'])
 def get_volunteers_by_ngo(ngo_id):
     try:
-        # Nota para avaliação dos alunos: Operação Scan simplificada para fins de desenvolvimento.
-        # Em cenários complexos de produção, índices globais secundários (GSI) seriam exigidos.
         response = table.scan(
             FilterExpression=boto3.dynamodb.conditions.Attr('ngo_id').eq(ngo_id)
         )

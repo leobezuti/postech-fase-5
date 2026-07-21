@@ -39,9 +39,6 @@ type App struct {
 	SqsQueueURL string
 }
 
-// initTracer configura o OpenTelemetry: exporta traces via OTLP para o
-// OTel Collector, que encaminha ao New Relic (Distributed Tracing / APM).
-// Endpoint e atributos vem das variaveis OTEL_* do ambiente.
 func initTracer() func() {
 	ctx := context.Background()
 	exp, err := otlptracegrpc.New(ctx, otlptracegrpc.WithInsecure())
@@ -101,7 +98,6 @@ func main() {
 	mux.HandleFunc("/health", app.HealthHandler)
 	mux.HandleFunc("/donations", app.DonationHandler)
 
-	// otelhttp instrumenta as requisicoes HTTP recebidas (gera spans/traces).
 	handler := otelhttp.NewHandler(mux, "http.server")
 
 	log.Printf("donation-service rodando na porta %s", port)

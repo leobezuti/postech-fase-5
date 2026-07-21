@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// Smoke test: garante que a serializacao de Donation funciona.
 func TestDonationJSON(t *testing.T) {
 	d := Donation{ID: 1, Amount: 10.5, Status: "APPROVED", DonorName: "Teste"}
 	b, err := json.Marshal(d)
