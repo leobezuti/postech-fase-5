@@ -23,7 +23,7 @@ env:
   IMAGE_ALIAS: ngo-service-image
   ECR_REPOSITORY: ngo-service
   GITOPS_REPO: leobezuti/postech-fase-5-gitops
-  SKIP_SECURITY_GATES: "false" # DevSecOps ligado: SAST (Semgrep) + SCA/secret/IaC (Trivy)
+  SKIP_SECURITY_GATES: "false" # DevSecOps: SAST (Semgrep) + SCA/secret/IaC (Trivy)
 
 jobs:
   config:
@@ -34,7 +34,6 @@ jobs:
       - id: export
         run: echo "skip_security_gates=${SKIP_SECURITY_GATES}" >> "$GITHUB_OUTPUT"
 
-  # ---------------- SAST: analise estatica de codigo ----------------
   sast:
     name: SAST (Semgrep)
     needs: config
@@ -44,9 +43,9 @@ jobs:
       image: semgrep/semgrep
     steps:
       - uses: actions/checkout@v4
-      - name: Semgrep scan
+      - name: Semgrep scan (SAST)
         run: semgrep scan --config auto --sarif --output semgrep.sarif ngo-service || true
-      - name: Upload Semgrep SARIF
+      - name: Upload Semgrep SARIF (code scanning)
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         continue-on-error: true
@@ -54,36 +53,32 @@ jobs:
           sarif_file: semgrep.sarif
           category: sast-ngo-service
 
-  # ---------------- SCA / Secret / IaC ----------------
   sca:
-    name: SCA (Trivy Filesystem)
+    name: SCA (Trivy)
     needs: config
     if: needs.config.outputs.skip_security_gates != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.28.0
-        continue-on-error: true
-        with:
-          scan-type: fs
-          scan-ref: ngo-service
-          scanners: vuln,secret,misconfig
-          format: sarif
-          output: trivy-fs.sarif
-      - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
+      - name: Trivy filesystem scan (SCA/secret/IaC)
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/src" aquasec/trivy:0.55.0 \
+            fs --scanners vuln,secret,misconfig --format table \
+            --output /src/trivy-fs.txt /src/ngo-service || true
+          echo '===== Trivy Filesystem Report ====='
+          cat trivy-fs.txt || echo '(sem saida)'
+      - name: Upload SCA report
+        uses: actions/upload-artifact@v4
         if: always()
-        continue-on-error: true
         with:
-          sarif_file: trivy-fs.sarif
-          category: sca-ngo-service
+          name: trivy-sca-ngo-service
+          path: trivy-fs.txt
 
   build-scan-push:
     name: Build, Scan and Push
     runs-on: ubuntu-latest
     needs: [config, sast, sca]
-    if: always() && needs.config.result == 'success' && (needs.sast.result == 'success' || needs.sast.result == 'skipped') && (needs.sca.result == 'success' || needs.sca.result == 'skipped')
+    if: always() && needs.config.result == 'success' && needs.sast.result != 'failure' && needs.sca.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - name: Configure AWS credentials
@@ -100,23 +95,18 @@ jobs:
         run: |
           docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} -t ${{ env.ECR_REPOSITORY }}:latest ngo-service
       - name: Trivy image scan (relatorio)
-        uses: aquasecurity/trivy-action@0.28.0
-        continue-on-error: true
-        with:
-          scan-type: image
-          image-ref: ${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          scanners: vuln
-          severity: CRITICAL,HIGH
-          format: table
-          output: trivy-image.txt
-          exit-code: "0"
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.55.0 \
+            image --scanners vuln --severity CRITICAL,HIGH --format table \
+            ${{ env.ECR_REPOSITORY }}:${{ github.sha }} > trivy-image.txt 2>&1 || true
+          echo '===== Trivy Image Report ====='
+          cat trivy-image.txt || echo '(sem saida)'
       - name: Upload image scan report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trivy-image-report-${{ env.SERVICE_NAME }}
+          name: trivy-image-ngo-service
           path: trivy-image.txt
-          retention-days: 14
       - name: Push image to ECR
         run: |
           docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
