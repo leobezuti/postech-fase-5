@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from extensions import db, migrate
 import models  # noqa: F401
 
-print("deployv2")
+print("deployv3")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger(__name__)
