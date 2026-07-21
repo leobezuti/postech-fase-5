@@ -10,7 +10,6 @@ on:
     branches: [main]
     paths:
       - "volunteer-service/**"
-      - ".github/workflows/volunteer-service-ci.yml"
   workflow_dispatch:
 
 permissions:
@@ -24,7 +23,7 @@ env:
   IMAGE_ALIAS: volunteer-service-image
   ECR_REPOSITORY: volunteer-service
   GITOPS_REPO: leobezuti/postech-fase-5-gitops
-  SKIP_SECURITY_GATES: "true" # set to "false" to re-enable Sonar and Trivy
+  SKIP_SECURITY_GATES: "false" # DevSecOps ligado: SAST (Semgrep) + SCA/secret/IaC (Trivy)
 
 jobs:
   config:
@@ -35,63 +34,57 @@ jobs:
       - id: export
         run: echo "skip_security_gates=${SKIP_SECURITY_GATES}" >> "$GITHUB_OUTPUT"
 
-  # sonarcloud:
-  #   name: SonarCloud Analysis
-  #   needs: config
-  #   if: needs.config.outputs.skip_security_gates != 'true'
-  #   runs-on: ubuntu-latest
-  #   concurrency:
-  #     group: sonar-scanner-cli-cache
-  #     cancel-in-progress: false
-  #     queue: max
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
+  # ---------------- SAST: analise estatica de codigo ----------------
+  sast:
+    name: SAST (Semgrep)
+    needs: config
+    if: needs.config.outputs.skip_security_gates != 'true'
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep scan
+        run: semgrep scan --config auto --sarif --output semgrep.sarif volunteer-service || true
+      - name: Upload Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: semgrep.sarif
+          category: sast-volunteer-service
 
-  #     - name: SonarCloud Scan
-  #       uses: SonarSource/sonarqube-scan-action@v4
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
-  #         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-  #       with:
-  #         projectBaseDir: volunteer-service
-
-  # trivy-fs:
-  #   name: Trivy Filesystem Scan
-  #   needs: config
-  #   if: needs.config.outputs.skip_security_gates != 'true'
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout
-  #       uses: actions/checkout@v4
-
-  #     - name: Run Trivy filesystem scan
-  #       uses: aquasecurity/trivy-action@v0.36.0
-  #       with:
-  #         scan-type: fs
-  #         scan-ref: volunteer-service
-  #         scanners: vuln,secret,config
-  #         format: sarif
-  #         output: trivy-fs-results.sarif
-
-  #     - name: Upload Trivy SARIF
-  #       uses: github/codeql-action/upload-sarif@v3
-  #       if: always()
-  #       with:
-  #         sarif_file: trivy-fs-results.sarif
-  #         category: trivy-fs-volunteer-service
+  # ---------------- SCA / Secret / IaC ----------------
+  sca:
+    name: SCA (Trivy Filesystem)
+    needs: config
+    if: needs.config.outputs.skip_security_gates != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: volunteer-service
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: trivy-fs.sarif
+          category: sca-volunteer-service
 
   build-scan-push:
     name: Build, Scan and Push
     runs-on: ubuntu-latest
-    # needs: [config, sonarcloud, trivy-fs]
-    needs: [config]
+    needs: [config, sast, sca]
+    if: always() && needs.config.result == 'success' && (needs.sast.result == 'success' || needs.sast.result == 'skipped') && (needs.sca.result == 'success' || needs.sca.result == 'skipped')
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -99,44 +92,33 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-
       - name: Build Docker image
         run: |
-          docker build \
-            -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
-            -t ${{ env.ECR_REPOSITORY }}:latest \
-            volunteer-service
-
-      # - name: Run Trivy image scan
-      #   if: needs.config.outputs.skip_security_gates != 'true'
-      #   uses: aquasecurity/trivy-action@v0.36.0
-      #   with:
-      #     scan-type: image
-      #     image-ref: ${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-      #     scanners: vuln
-      #     severity: CRITICAL,HIGH
-      #     format: table
-      #     output: trivy-image-results.txt
-      #     exit-code: 1
-
-      # - name: Upload Trivy image scan report
-      #   uses: actions/upload-artifact@v4
-      #   if: always() && needs.config.outputs.skip_security_gates != 'true'
-      #   with:
-      #     name: trivy-image-report-${{ env.SERVICE_NAME }}
-      #     path: trivy-image-results.txt
-      #     retention-days: 14
-
+          docker build -t ${{ env.ECR_REPOSITORY }}:${{ github.sha }} -t ${{ env.ECR_REPOSITORY }}:latest volunteer-service
+      - name: Trivy image scan (relatorio)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          format: table
+          output: trivy-image.txt
+          exit-code: "0"
+      - name: Upload image scan report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-image-report-${{ env.SERVICE_NAME }}
+          path: trivy-image.txt
+          retention-days: 14
       - name: Push image to ECR
         run: |
-          docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          docker tag ${{ env.ECR_REPOSITORY }}:latest \
-            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          docker tag ${{ env.ECR_REPOSITORY }}:${{ github.sha }} ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          docker tag ${{ env.ECR_REPOSITORY }}:latest ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
           docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           docker push ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
 
@@ -151,10 +133,8 @@ jobs:
           repository: ${{ env.GITOPS_REPO }}
           token: ${{ secrets.REPO_TOKEN }}
           path: gitops
-
       - name: Install kustomize
         uses: imranismail/setup-kustomize@v2
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -162,16 +142,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-
       - name: Get AWS account ID
         id: aws
         run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
-
       - name: Update image tag in kustomization
         working-directory: gitops/volunteer-service
         run: |
           kustomize edit set image ${{ env.IMAGE_ALIAS }}=${{ steps.aws.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-
       - name: Commit and push to GitOps repo
         working-directory: gitops
         run: |
