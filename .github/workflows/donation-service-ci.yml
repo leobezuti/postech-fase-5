@@ -34,6 +34,16 @@ jobs:
       - id: export
         run: echo "skip_security_gates=${SKIP_SECURITY_GATES}" >> "$GITHUB_OUTPUT"
 
+  test:
+    name: Testes
+    needs: config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rodar testes
+        run: |
+          cd donation-service && go test ./...
+
   sast:
     name: SAST (Semgrep)
     needs: config
@@ -77,8 +87,8 @@ jobs:
   build-scan-push:
     name: Build, Scan and Push
     runs-on: ubuntu-latest
-    needs: [config, sast, sca]
-    if: always() && needs.config.result == 'success' && needs.sast.result != 'failure' && needs.sca.result != 'failure'
+    needs: [config, test, sast, sca]
+    if: always() && needs.config.result == 'success' && needs.test.result == 'success' && needs.sast.result != 'failure' && needs.sca.result != 'failure'
     steps:
       - uses: actions/checkout@v4
       - name: Configure AWS credentials

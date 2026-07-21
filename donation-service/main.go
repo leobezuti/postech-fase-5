@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log"
@@ -15,6 +16,12 @@ import (
 	"github.com/aws/aws-sdk-go/service/sqs"
 	_ "github.com/jackc/pgx/v4/stdlib"
 	"github.com/joho/godotenv"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type Donation struct {
@@ -32,8 +39,31 @@ type App struct {
 	SqsQueueURL string
 }
 
+// initTracer configura o OpenTelemetry: exporta traces via OTLP para o
+// OTel Collector, que encaminha ao New Relic (Distributed Tracing / APM).
+// Endpoint e atributos vem das variaveis OTEL_* do ambiente.
+func initTracer() func() {
+	ctx := context.Background()
+	exp, err := otlptracegrpc.New(ctx, otlptracegrpc.WithInsecure())
+	if err != nil {
+		log.Printf("OTel: falha ao iniciar exporter de traces: %v", err)
+		return func() {}
+	}
+	res, _ := resource.New(ctx, resource.WithFromEnv())
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+	log.Println("OpenTelemetry inicializado (traces -> OTel Collector).")
+	return func() { _ = tp.Shutdown(context.Background()) }
+}
+
 func main() {
 	_ = godotenv.Load()
+
+	shutdown := initTracer()
+	defer shutdown()
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -71,8 +101,11 @@ func main() {
 	mux.HandleFunc("/health", app.HealthHandler)
 	mux.HandleFunc("/donations", app.DonationHandler)
 
+	// otelhttp instrumenta as requisicoes HTTP recebidas (gera spans/traces).
+	handler := otelhttp.NewHandler(mux, "http.server")
+
 	log.Printf("donation-service rodando na porta %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
 func (a *App) HealthHandler(w http.ResponseWriter, r *http.Request) {
